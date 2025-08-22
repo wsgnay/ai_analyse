@@ -1339,6 +1339,651 @@ class DroneDetectionApp {
     }
 }
 
+
+class RTMPStreamManager {
+    constructor(app) {
+        this.app = app;
+        this.currentStreamTask = null;
+        this.streamStatsInterval = null;
+        this.init();
+    }
+
+    init() {
+        this.setupEventListeners();
+        this.loadServerInfo();
+    }
+
+    setupEventListeners() {
+        // 推流开关
+        const enableRtmpStream = document.getElementById('enableRtmpStream');
+        if (enableRtmpStream) {
+            enableRtmpStream.addEventListener('change', (e) => {
+                this.toggleRtmpConfig(e.target.checked);
+            });
+        }
+
+        // 使用默认服务器按钮
+        const useDefaultRtmp = document.getElementById('useDefaultRtmp');
+        if (useDefaultRtmp) {
+            useDefaultRtmp.addEventListener('click', () => {
+                this.useDefaultServer();
+            });
+        }
+
+        // 测试连接按钮
+        const testRtmpConnection = document.getElementById('testRtmpConnection');
+        if (testRtmpConnection) {
+            testRtmpConnection.addEventListener('click', () => {
+                this.testConnection();
+            });
+        }
+
+        // 停止推流按钮
+        const stopRtmpStream = document.getElementById('stopRtmpStream');
+        if (stopRtmpStream) {
+            stopRtmpStream.addEventListener('click', () => {
+                this.stopStream();
+            });
+        }
+
+        // 查看服务器信息按钮
+        const viewServerInfo = document.getElementById('viewServerInfo');
+        if (viewServerInfo) {
+            viewServerInfo.addEventListener('click', () => {
+                this.showServerInfo();
+            });
+        }
+
+        // 复制播放地址按钮
+        const copyPlaybackUrl = document.getElementById('copyPlaybackUrl');
+        if (copyPlaybackUrl) {
+            copyPlaybackUrl.addEventListener('click', () => {
+                this.copyPlaybackUrl();
+            });
+        }
+
+        // 刷新任务列表
+        const refreshTasks = document.getElementById('refreshTasks');
+        if (refreshTasks) {
+            refreshTasks.addEventListener('click', () => {
+                this.refreshActiveTasks();
+            });
+        }
+    }
+
+    // 切换RTMP配置显示
+    toggleRtmpConfig(enabled) {
+        const rtmpConfig = document.getElementById('rtmpStreamConfig');
+        if (rtmpConfig) {
+            rtmpConfig.style.display = enabled ? 'block' : 'none';
+        }
+
+        // 更新开始按钮文本
+        const startButton = document.getElementById('startVideoTracking');
+        if (startButton) {
+            const text = enabled ? '开始AI检测和推流' : '开始跟踪';
+            startButton.innerHTML = `<i class="bi bi-play-circle me-2"></i>${text}`;
+        }
+    }
+
+    // 使用默认服务器
+    async useDefaultServer() {
+        try {
+            const response = await fetch('/api/stream-publish/server-info');
+            const serverInfo = await response.json();
+
+            const rtmpUrl = document.getElementById('rtmpUrl');
+            if (rtmpUrl && serverInfo.primaryServer) {
+                rtmpUrl.value = serverInfo.primaryServer.baseUrl;
+                this.app.showAlert('已加载默认服务器地址', 'success');
+            }
+        } catch (error) {
+            console.error('获取服务器信息失败:', error);
+            this.app.showAlert('获取服务器信息失败', 'danger');
+        }
+    }
+
+    // 测试RTMP连接
+    async testConnection() {
+        const rtmpUrl = document.getElementById('rtmpUrl').value.trim();
+        const testButton = document.getElementById('testRtmpConnection');
+
+        if (!rtmpUrl) {
+            this.app.showAlert('请先输入RTMP地址或点击"默认"使用默认服务器', 'warning');
+            return;
+        }
+
+        // 显示测试状态
+        testButton.disabled = true;
+        testButton.innerHTML = '<div class="spinner-border spinner-border-sm me-1"></div>测试中...';
+
+        try {
+            const response = await fetch('/api/stream-publish/test-connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rtmpUrl })
+            });
+
+            const result = await response.json();
+
+            if (result.connected) {
+                this.app.showAlert(`连接测试成功！服务器: ${result.serverHost}`, 'success');
+            } else {
+                this.app.showAlert(`连接测试失败: ${result.message}`, 'danger');
+            }
+        } catch (error) {
+            console.error('连接测试失败:', error);
+            this.app.showAlert('连接测试失败: ' + error.message, 'danger');
+        } finally {
+            testButton.disabled = false;
+            testButton.innerHTML = '测试';
+        }
+    }
+
+    // 开始推流（集成到现有的视频跟踪函数中）
+    async startStreamWithTracking(trackingRequest) {
+        const enableRtmp = document.getElementById('enableRtmpStream').checked;
+
+        if (!enableRtmp) {
+            // 如果未启用推流，使用原有的跟踪逻辑
+            return this.app.startVideoTracking();
+        }
+
+        // 构建推流请求
+        const streamRequest = {
+            inputSource: trackingRequest.videoSource,
+            rtmpUrl: document.getElementById('rtmpUrl').value.trim(),
+            taskName: document.getElementById('streamTaskName').value.trim() || 'VideoAI',
+            videoBitrate: parseInt(document.getElementById('videoBitrate').value),
+            audioBitrate: 128000, // 默认音频比特率
+            detectionInterval: 30,
+            apiKey: trackingRequest.apiKey,
+            confThreshold: trackingRequest.confThreshold,
+            trackerType: trackingRequest.trackerType,
+            enableAutoDedup: trackingRequest.enableAutoDedup
+        };
+
+        try {
+            // 启动推流任务
+            const response = await fetch('/api/stream-publish/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(streamRequest)
+            });
+
+            if (!response.ok) {
+                throw new Error(`推流启动失败: ${response.status}`);
+            }
+
+            const result = await response.json();
+            this.currentStreamTask = result;
+
+            // 显示推流状态
+            this.showStreamStatus(result);
+
+            // 开始统计信息更新
+            this.startStatsUpdates(result.taskId);
+
+            this.app.showAlert(`推流任务已启动: ${result.taskId}`, 'success');
+            this.app.addLog(`推流已开始: ${result.rtmpUrl}`, 'success');
+
+        } catch (error) {
+            console.error('推流启动失败:', error);
+            this.app.showAlert('推流启动失败: ' + error.message, 'danger');
+        }
+    }
+
+    // 显示推流状态
+    showStreamStatus(streamResult) {
+        const statusDiv = document.getElementById('rtmpStreamStatus');
+        const statusText = document.getElementById('streamStatusText');
+        const playbackInfo = document.getElementById('rtmpPlaybackInfo');
+        const playbackUrl = document.getElementById('rtmpPlaybackUrl');
+
+        if (statusDiv) {
+            statusDiv.style.display = 'block';
+        }
+
+        if (statusText) {
+            statusText.innerHTML = `<span class="stream-indicator active"></span>推流中: ${streamResult.taskId}`;
+        }
+
+        // 显示播放地址
+        if (playbackInfo && playbackUrl) {
+            playbackInfo.style.display = 'block';
+            playbackUrl.value = streamResult.rtmpUrl;
+        }
+    }
+
+    // 开始统计信息更新
+    startStatsUpdates(taskId) {
+        if (this.streamStatsInterval) {
+            clearInterval(this.streamStatsInterval);
+        }
+
+        this.streamStatsInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/stream-publish/${taskId}`);
+                if (response.ok) {
+                    const stats = await response.json();
+                    this.updateStreamStats(stats);
+                } else {
+                    console.warn('获取推流统计失败:', response.status);
+                }
+            } catch (error) {
+                console.error('更新推流统计失败:', error);
+            }
+        }, 2000); // 每2秒更新一次
+    }
+
+    // 更新推流统计显示
+    updateStreamStats(stats) {
+        const frameCount = document.getElementById('streamFrameCount');
+        const fps = document.getElementById('streamFps');
+        const detections = document.getElementById('streamDetections');
+
+        if (frameCount) frameCount.textContent = stats.frameCount || 0;
+        if (fps) fps.textContent = (stats.currentFps || 0).toFixed(1);
+        if (detections) detections.textContent = stats.detectionCount || 0;
+    }
+
+    // 停止推流
+    async stopStream() {
+        if (!this.currentStreamTask) {
+            this.app.showAlert('没有活跃的推流任务', 'warning');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/stream-publish/stop/${this.currentStreamTask.taskId}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                this.hideStreamStatus();
+                this.app.showAlert('推流已停止', 'success');
+                this.app.addLog(`推流已停止: ${this.currentStreamTask.taskId}`, 'info');
+                this.currentStreamTask = null;
+            } else {
+                throw new Error(`停止推流失败: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('停止推流失败:', error);
+            this.app.showAlert('停止推流失败: ' + error.message, 'danger');
+        }
+    }
+
+    // 隐藏推流状态
+    hideStreamStatus() {
+        const statusDiv = document.getElementById('rtmpStreamStatus');
+        const playbackInfo = document.getElementById('rtmpPlaybackInfo');
+
+        if (statusDiv) statusDiv.style.display = 'none';
+        if (playbackInfo) playbackInfo.style.display = 'none';
+
+        // 清除统计更新
+        if (this.streamStatsInterval) {
+            clearInterval(this.streamStatsInterval);
+            this.streamStatsInterval = null;
+        }
+    }
+
+    // 复制播放地址
+    copyPlaybackUrl() {
+        const playbackUrl = document.getElementById('rtmpPlaybackUrl');
+        if (playbackUrl) {
+            playbackUrl.select();
+            document.execCommand('copy');
+            this.app.showAlert('播放地址已复制到剪贴板', 'success');
+        }
+    }
+
+    // 显示服务器信息
+    async showServerInfo() {
+        const modal = new bootstrap.Modal(document.getElementById('serverInfoModal'));
+        const content = document.getElementById('serverInfoContent');
+
+        try {
+            const response = await fetch('/api/stream-publish/server-info');
+            const serverInfo = await response.json();
+
+            content.innerHTML = this.generateServerInfoHTML(serverInfo);
+            modal.show();
+        } catch (error) {
+            console.error('获取服务器信息失败:', error);
+            content.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    获取服务器信息失败: ${error.message}
+                </div>
+            `;
+            modal.show();
+        }
+    }
+
+    // 生成服务器信息HTML
+    generateServerInfoHTML(serverInfo) {
+        let html = `
+            <div class="row">
+                <div class="col-md-6">
+                    <h6><i class="bi bi-server me-2"></i>主服务器</h6>
+                    <div class="bg-light p-3 rounded">
+                        <div><strong>地址:</strong> ${serverInfo.primaryServer.host}</div>
+                        <div><strong>端口:</strong> ${serverInfo.primaryServer.port}</div>
+                        <div><strong>应用:</strong> ${serverInfo.primaryServer.app}</div>
+                        <div><strong>完整地址:</strong> ${serverInfo.primaryServer.baseUrl}</div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <h6><i class="bi bi-gear me-2"></i>推流配置</h6>
+                    <div class="bg-light p-3 rounded">
+                        <div><strong>最大并发:</strong> ${serverInfo.streamConfig.maxConcurrentTasks}</div>
+                        <div><strong>默认比特率:</strong> ${(serverInfo.streamConfig.defaultBitrate/1000).toFixed(0)}K</div>
+                        <div><strong>编码预设:</strong> ${serverInfo.streamConfig.encoderPreset}</div>
+                    </div>
+                </div>
+            </div>`;
+
+        if (serverInfo.backupServers && serverInfo.backupServers.length > 0) {
+            html += `
+                <div class="mt-3">
+                    <h6><i class="bi bi-hdd-stack me-2"></i>备用服务器</h6>
+                    <div class="row">`;
+
+            serverInfo.backupServers.forEach((server, index) => {
+                html += `
+                    <div class="col-md-6 mb-2">
+                        <div class="border p-2 rounded">
+                            <small><strong>备用${index + 1}:</strong> ${server.baseUrl}</small>
+                        </div>
+                    </div>`;
+            });
+
+            html += `</div></div>`;
+        }
+
+        html += `
+            <div class="mt-3">
+                <h6><i class="bi bi-info-circle me-2"></i>使用说明</h6>
+                <div class="alert alert-info">
+                    <ul class="mb-0">
+                        <li>推流地址格式: <code>rtmp://服务器:端口/应用/流名称</code></li>
+                        <li>其他用户可使用VLC、OBS等播放器观看AI处理后的视频流</li>
+                        <li>建议网络带宽: 2-5 Mbps (根据视频质量调整)</li>
+                        <li>支持的编码: H.264视频 + AAC音频</li>
+                    </ul>
+                </div>
+            </div>`;
+
+        return html;
+    }
+
+    // 加载服务器信息 (页面初始化时调用)
+    async loadServerInfo() {
+        try {
+            const response = await fetch('/api/stream-publish/server-info');
+            if (response.ok) {
+                const serverInfo = await response.json();
+                // 可以在这里预填充一些信息，比如任务名称等
+                this.updateUIWithServerInfo(serverInfo);
+            }
+        } catch (error) {
+            console.warn('加载服务器信息失败:', error);
+        }
+    }
+
+    // 根据服务器信息更新UI
+    updateUIWithServerInfo(serverInfo) {
+        // 可以根据需要更新UI元素，比如预设推荐的比特率等
+        const videoBitrate = document.getElementById('videoBitrate');
+        if (videoBitrate && serverInfo.streamConfig && serverInfo.streamConfig.defaultBitrate) {
+            videoBitrate.value = serverInfo.streamConfig.defaultBitrate;
+        }
+    }
+
+    // 刷新活跃任务列表
+    async refreshActiveTasks() {
+        const refreshButton = document.getElementById('refreshTasks');
+        const tasksList = document.getElementById('activeTasksList');
+        const taskCount = document.getElementById('activeTaskCount');
+
+        if (refreshButton) {
+            refreshButton.disabled = true;
+            refreshButton.innerHTML = '<div class="spinner-border spinner-border-sm me-1"></div>刷新中...';
+        }
+
+        try {
+            const response = await fetch('/api/stream-publish/active');
+            const tasks = await response.json();
+
+            if (taskCount) {
+                taskCount.textContent = tasks.length;
+            }
+
+            if (tasksList) {
+                tasksList.innerHTML = this.generateTasksListHTML(tasks);
+            }
+
+        } catch (error) {
+            console.error('获取活跃任务失败:', error);
+            if (tasksList) {
+                tasksList.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        获取任务列表失败: ${error.message}
+                    </div>`;
+            }
+        } finally {
+            if (refreshButton) {
+                refreshButton.disabled = false;
+                refreshButton.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>刷新';
+            }
+        }
+    }
+
+    // 生成任务列表HTML
+    generateTasksListHTML(tasks) {
+        if (tasks.length === 0) {
+            return `
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 mb-2"></i>
+                    <div>暂无活跃的推流任务</div>
+                </div>`;
+        }
+
+        let html = '<div class="table-responsive"><table class="table table-sm">';
+        html += `
+            <thead>
+                <tr>
+                    <th>任务ID</th>
+                    <th>输入源</th>
+                    <th>推流地址</th>
+                    <th>状态</th>
+                    <th>开始时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+        tasks.forEach(task => {
+            const startTime = new Date(task.startTime).toLocaleString();
+            const shortId = task.taskId.length > 15 ? task.taskId.substring(0, 15) + '...' : task.taskId;
+            const shortSource = task.inputSource.length > 20 ? task.inputSource.substring(0, 20) + '...' : task.inputSource;
+            const shortRtmp = task.rtmpUrl.length > 30 ? task.rtmpUrl.substring(0, 30) + '...' : task.rtmpUrl;
+
+            html += `
+                <tr>
+                    <td><code class="small">${shortId}</code></td>
+                    <td class="small">${shortSource}</td>
+                    <td class="small">${shortRtmp}</td>
+                    <td><span class="badge bg-success">${task.status}</span></td>
+                    <td class="small">${startTime}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger" onclick="rtmpManager.stopTaskById('${task.taskId}')">
+                            <i class="bi bi-stop"></i>
+                        </button>
+                    </td>
+                </tr>`;
+        });
+
+        html += '</tbody></table></div>';
+        return html;
+    }
+
+    // 通过ID停止特定任务
+    async stopTaskById(taskId) {
+        try {
+            const response = await fetch(`/api/stream-publish/stop/${taskId}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                this.app.showAlert(`任务 ${taskId} 已停止`, 'success');
+                this.refreshActiveTasks(); // 刷新任务列表
+            } else {
+                throw new Error(`停止任务失败: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('停止任务失败:', error);
+            this.app.showAlert('停止任务失败: ' + error.message, 'danger');
+        }
+    }
+
+    // 清理资源
+    cleanup() {
+        if (this.streamStatsInterval) {
+            clearInterval(this.streamStatsInterval);
+            this.streamStatsInterval = null;
+        }
+    }
+}
+
+
+
+// 修改现有的startVideoTracking方法:
+async function enhancedStartVideoTracking() {
+    const videoSourceInput = document.getElementById('videoSource')?.value?.trim();
+
+    // 检查是否有有效的视频源（文件或输入的地址）
+    if (!this.currentVideoFile && !videoSourceInput) {
+        this.showAlert('请上传视频文件或输入视频源地址', 'warning');
+        return;
+    }
+
+    if (!this.settings.apiKey) {
+        this.showAlert('请先在设置中配置API Key', 'warning');
+        this.showSection('settings');
+        return;
+    }
+
+    // 构建基础跟踪请求参数
+    const trackingRequest = {
+        apiKey: this.settings.apiKey,
+        confThreshold: parseFloat(document.getElementById('videoConfidence')?.value || 0.5),
+        trackerType: document.getElementById('trackerType')?.value || 'MIL',
+        enableAutoDedup: document.getElementById('autoDedup')?.checked || true,
+        videoSource: videoSourceInput || "",
+        maxDetectionCalls: 4,
+        minDetectionInterval: 90,
+        iouThreshold: 0.05,
+        overlapThreshold: 0.4,
+        maxLostFrames: 30,
+        modelName: this.settings.modelName || "qwen2.5-vl-72b-instruct",
+        apiTimeout: this.settings.apiTimeout || 120,
+        saveVideo: true,
+        showPreview: this.streamEnabled
+    };
+
+    // 检查是否启用了RTMP推流
+    const enableRtmp = document.getElementById('enableRtmpStream')?.checked;
+
+    if (enableRtmp) {
+        // 使用RTMP推流模式
+        await this.rtmpManager.startStreamWithTracking(trackingRequest);
+    } else {
+        // 使用原有的本地跟踪模式
+        await this.originalStartVideoTracking(trackingRequest);
+    }
+}
+
+// 原有的跟踪逻辑保持不变，重命名为originalStartVideoTracking
+async function originalStartVideoTracking(request) {
+    // 如果没有输入视频源但有上传文件，需要先上传文件
+    if (!request.videoSource && this.currentVideoFile) {
+        const formData = new FormData();
+        formData.append('file', this.currentVideoFile);
+
+        try {
+            const uploadResponse = await fetch('/api/drone/upload/video', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error(`视频上传失败: ${uploadResponse.status}`);
+            }
+
+            const uploadResult = await uploadResponse.json();
+            request.videoSource = uploadResult.filePath;
+        } catch (uploadError) {
+            this.showAlert(`文件上传失败: ${uploadError.message}`, 'danger');
+            return;
+        }
+    }
+
+    // 如果启用了实时视频流预览，建立WebSocket连接
+    if (this.streamEnabled) {
+        this.connectWebSocket();
+    }
+
+    // 执行原有的视频跟踪逻辑
+    try {
+        this.showProgress('video', true);
+        this.updateProgress('video', 10);
+        this.addLog(`开始处理视频源: ${request.videoSource}`, 'info');
+
+        const response = await fetch(`${this.apiBaseUrl}/video/track`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        this.updateProgress('video', 100);
+
+        setTimeout(() => {
+            this.showProgress('video', false);
+            this.displayVideoResult(result);
+            this.addLog('视频跟踪处理完成', 'success');
+
+            // 关闭WebSocket连接
+            if (this.websocket) {
+                this.websocket.close();
+                this.websocket = null;
+            }
+        }, 1000);
+
+    } catch (error) {
+        this.showProgress('video', false);
+        this.showAlert(`跟踪失败: ${error.message}`, 'danger');
+        this.addLog(`视频跟踪失败: ${error.message}`, 'error');
+
+        // 关闭WebSocket连接
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
+        }
+    }
+}
+
+
 // 全局函数：查看历史记录详情
 function viewHistoryDetail(type, id) {
     if (window.app) {
@@ -1459,7 +2104,13 @@ function viewImageFullscreen(imagePath) {
     window.open(imagePath, '_blank');
 }
 
-// 初始化应用
+let rtmpManager = null;
+
+// 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
-    window.app = new DroneDetectionApp();
+    // 假设你的App实例叫做app
+    if (typeof window.app !== 'undefined') {
+        rtmpManager = new RTMPStreamManager(window.app);
+        window.app.rtmpManager = rtmpManager;
+    }
 });

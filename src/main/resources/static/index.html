@@ -219,6 +219,73 @@
             background-color: #fee2e2;
             color: #991b1b;
         }
+        .upload-area {
+            border: 2px dashed #d1ecf1;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-area:hover {
+            border-color: #0dcaf0;
+            background-color: #f8f9fa;
+        }
+
+        .rtmp-config-card {
+            border-left: 4px solid #0d6efd;
+        }
+
+        .stream-status-connected {
+            color: #198754;
+        }
+
+        .stream-status-error {
+            color: #dc3545;
+        }
+
+        .stream-status-connecting {
+            color: #fd7e14;
+        }
+
+        /* 推流统计卡片动画 */
+        .stream-stats .border {
+            transition: all 0.3s ease;
+        }
+
+        .stream-stats .border:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+
+        /* RTMP配置区域高亮 */
+        #rtmpStreamConfig {
+            border-left: 3px solid #0d6efd;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        }
+
+        /* 推流状态指示器 */
+        .stream-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .stream-indicator.active {
+            background-color: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .stream-indicator.inactive {
+            background-color: #dc3545;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -498,7 +565,7 @@
                                 </h5>
                             </div>
                             <div class="card-body">
-                                <div class="upload-area" id="videoUploadArea" onclick="document.getElementById('videoInput').click()">
+                                <div class="upload-area text-center p-4 mb-3" onclick="document.getElementById('videoInput').click()">
                                     <i class="bi bi-camera-video fs-1 text-muted mb-3"></i>
                                     <h5>点击或拖拽上传视频</h5>
                                     <p class="text-muted mb-0">支持 MP4, AVI, MOV 格式</p>
@@ -509,6 +576,107 @@
                                     <input type="text" class="form-control" id="videoSource" placeholder="上传文件或输入摄像头ID/RTSP地址 (如: 0, rtsp://...)">
                                     <div class="form-text">留空则使用上传的文件，输入数字使用本地摄像头，输入地址使用网络流</div>
                                 </div>
+
+                                <!-- 🆕 RTMP推流配置区域 -->
+                                <div class="card mt-3" style="border: 2px solid #e3f2fd;">
+                                    <div class="card-header bg-light">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="enableRtmpStream">
+                                            <label class="form-check-label fw-bold" for="enableRtmpStream">
+                                                <i class="bi bi-broadcast me-2 text-primary"></i>
+                                                启用RTMP推流
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="card-body" id="rtmpStreamConfig" style="display: none;">
+                                        <div class="mb-3">
+                                            <label class="form-label">
+                                                <i class="bi bi-server me-1"></i>
+                                                RTMP推流地址
+                                            </label>
+                                            <div class="input-group">
+                                                <input type="text" class="form-control" id="rtmpUrl"
+                                                       placeholder="留空使用默认服务器 或 rtmp://your-server:1935/live/stream">
+                                                <button class="btn btn-outline-secondary" type="button" id="useDefaultRtmp">
+                                                    默认
+                                                </button>
+                                                <button class="btn btn-outline-info" type="button" id="testRtmpConnection">
+                                                    测试
+                                                </button>
+                                            </div>
+                                            <div class="form-text">
+                                                <i class="bi bi-info-circle me-1"></i>
+                                                留空将自动使用配置的默认服务器 (47.122.22.70:1935)
+                                            </div>
+                                        </div>
+
+                                        <!-- 推流参数配置 -->
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <label class="form-label">任务名称</label>
+                                                <input type="text" class="form-control" id="streamTaskName"
+                                                       placeholder="自动生成" value="">
+                                                <div class="form-text">用于生成唯一流标识</div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">视频比特率</label>
+                                                <select class="form-select" id="videoBitrate">
+                                                    <option value="500000">500K (低质量)</option>
+                                                    <option value="1000000">1M (标准)</option>
+                                                    <option value="2000000" selected>2M (高质量)</option>
+                                                    <option value="3000000">3M (超高)</option>
+                                                    <option value="5000000">5M (专业)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <!-- 推流状态监控 -->
+                                        <div class="mt-3" id="rtmpStreamStatus" style="display: none;">
+                                            <div class="alert alert-info mb-2">
+                                                <div class="d-flex justify-content-between align-items-center">
+                                        <span>
+                                            <i class="bi bi-broadcast me-2"></i>
+                                            <span id="streamStatusText">推流准备中...</span>
+                                        </span>
+                                                    <button class="btn btn-sm btn-outline-danger" id="stopRtmpStream">
+                                                        <i class="bi bi-stop-circle me-1"></i>停止推流
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <!-- 推流统计信息 -->
+                                            <div class="row text-center">
+                                                <div class="col-4">
+                                                    <div class="border rounded p-2">
+                                                        <div class="fs-5 fw-bold text-primary" id="streamFrameCount">0</div>
+                                                        <small class="text-muted">帧数</small>
+                                                    </div>
+                                                </div>
+                                                <div class="col-4">
+                                                    <div class="border rounded p-2">
+                                                        <div class="fs-5 fw-bold text-success" id="streamFps">0</div>
+                                                        <small class="text-muted">FPS</small>
+                                                    </div>
+                                                </div>
+                                                <div class="col-4">
+                                                    <div class="border rounded p-2">
+                                                        <div class="fs-5 fw-bold text-warning" id="streamDetections">0</div>
+                                                        <small class="text-muted">检测数</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- 服务器信息查看 -->
+                                        <div class="mt-3">
+                                            <button class="btn btn-sm btn-outline-info" id="viewServerInfo">
+                                                <i class="bi bi-info-circle me-1"></i>查看服务器配置
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 原有的检测参数配置 -->
                                 <div class="row mt-3">
                                     <div class="col-md-6">
                                         <label class="form-label">置信度阈值</label>
@@ -534,18 +702,19 @@
                                 <div class="form-check mt-2">
                                     <input class="form-check-input" type="checkbox" id="enableStream" checked>
                                     <label class="form-check-label" for="enableStream">
-                                        启用实时视频流传输
+                                        启用实时视频流预览
                                     </label>
                                 </div>
 
                                 <button class="btn btn-primary w-100 mt-3" id="startVideoTracking" disabled>
                                     <i class="bi bi-play-circle me-2"></i>
-                                    开始跟踪
+                                    开始AI检测和推流
                                 </button>
                             </div>
                         </div>
                     </div>
 
+                    <!-- 右侧显示区域保持不变，但添加推流信息 -->
                     <div class="col-md-6 mb-4">
                         <div class="card">
                             <div class="card-header d-flex justify-content-between align-items-center">
@@ -570,6 +739,30 @@
                                     <div class="text-center text-muted py-5">
                                         <i class="bi bi-camera-video fs-1 mb-3"></i>
                                         <p>上传视频开始跟踪</p>
+                                    </div>
+                                </div>
+
+                                <!-- 推流播放地址显示 -->
+                                <div id="rtmpPlaybackInfo" style="display: none;">
+                                    <hr>
+                                    <h6>
+                                        <i class="bi bi-play-circle me-2 text-success"></i>
+                                        推流播放地址
+                                    </h6>
+                                    <div class="bg-light p-3 rounded">
+                                        <div class="mb-2">
+                                            <label class="form-label small fw-bold">RTMP播放地址：</label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" id="rtmpPlaybackUrl" readonly>
+                                                <button class="btn btn-outline-secondary" type="button" id="copyPlaybackUrl">
+                                                    <i class="bi bi-clipboard"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="small text-muted">
+                                            <i class="bi bi-info-circle me-1"></i>
+                                            其他用户可使用VLC、OBS等播放器观看AI处理后的实时视频流
+                                        </div>
                                     </div>
                                 </div>
                                 <div id="liveStreamContainer" style="display: none;">
@@ -614,6 +807,62 @@
             </div>
         </div>
     </div>
+
+    <div class="modal fade" id="serverInfoModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-server me-2"></i>
+                        RTMP服务器配置信息
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="serverInfoContent">
+                        <div class="text-center py-4">
+                            <div class="spinner-border" role="status"></div>
+                            <div class="mt-2">加载服务器信息...</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🆕 推流任务管理模态框 -->
+    <div class="modal fade" id="streamTaskModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-list-task me-2"></i>
+                        推流任务管理
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <h6>活跃任务 <span class="badge bg-primary" id="activeTaskCount">0</span></h6>
+                        </div>
+                        <div class="col-md-6 text-end">
+                            <button class="btn btn-sm btn-outline-primary" id="refreshTasks">
+                                <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                            </button>
+                        </div>
+                    </div>
+                    <div id="activeTasksList">
+                        <!-- 动态填充活跃任务列表 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
 
     <!-- 历史记录部分 -->
     <div id="history-section" class="section-content" style="display: none;">
