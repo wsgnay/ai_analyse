@@ -172,3 +172,84 @@ drone:
         enabled: true
         distance-threshold: 50.0
         confidence-threshold: 0.1
+streaming:
+  # RTMP推流配置
+  rtmp:
+    # 默认服务器地址
+    default-server: "rtmp://47.122.22.70:1935/live/"
+    # 备用服务器地址列表
+    backup-servers:
+      - "rtmp://47.122.22.70:1935/live/"
+      - "rtmp://localhost:1935/live/"
+    # 推流超时时间(秒)
+    timeout: 30
+    # 推流重试次数
+    max-retries: 3
+    # 推流缓冲大小
+    buffer-size: 1000
+
+  # 视频编码配置
+  video:
+    # 默认比特率(bps)
+    default-bitrate: 2000000  # 2Mbps
+    # 比特率范围
+    min-bitrate: 500000       # 500kbps
+    max-bitrate: 10000000     # 10Mbps
+    # 默认帧率
+    default-framerate: 25
+    # 编码器预设
+    encoder-preset: "veryfast"
+    # 编码器调优
+    encoder-tune: "zerolatency"
+    # GOP大小
+    gop-size: 60
+
+  # 音频编码配置
+  audio:
+    # 默认音频比特率(bps)
+    default-bitrate: 128000   # 128kbps
+    # 采样率
+    sample-rate: 44100
+    # 声道数
+    channels: 2
+
+  # 推流任务配置
+  task:
+    # 最大并发推流任务数
+    max-concurrent-tasks: 10
+    # 任务超时时间(分钟)
+    task-timeout: 60
+    # 自动清理失效任务的间隔(分钟)
+    cleanup-interval: 5
+
+# 🆕 新增：直播流配置
+livestream:
+  # RTMP服务器配置
+  rtmp:
+    # 主服务器
+    primary:
+      host: "47.122.22.70"
+      port: 1935
+      app: "live"
+      # 完整的基础URL: rtmp://47.122.22.70:1935/live/
+
+    # 备用服务器配置
+    backup:
+      - host: "localhost"
+        port: 1935
+        app: "live"
+
+  # HLS配置(可选)
+  hls:
+    enabled: false
+    base-url: "http://47.122.22.70:8080/hls/"
+    segment-duration: 6
+    segment-count: 3
+
+  # 推流认证配置(可选)
+  auth:
+    enabled: false
+    # 推流密钥前缀
+    stream-key-prefix: "ai_stream_"
+    # 密钥过期时间(小时)
+    key-expiry-hours: 24
